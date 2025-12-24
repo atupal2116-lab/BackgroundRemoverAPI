@@ -1,38 +1,62 @@
 import os
+import gc # Çöp toplayıcı (RAM temizlemek için)
 from fastapi import FastAPI, UploadFile, File
 from rembg import remove, new_session
 from starlette.responses import Response
 
 # --- AYARLAR ---
-# 1. Kütüphaneye, model dosyasını projenin olduğu yerde (.u2net klasöründe) aramasını söylüyoruz.
-# Bu satır, importlardan ve işlemlerden önce çalışmalı.
 os.environ["U2NET_HOME"] = os.getcwd()
 
 app = FastAPI()
 
-# --- MODEL YÜKLEME ---
-# 2. Sunucu başlarken modeli bir kere yükleyip hafızaya alıyoruz (Global Session).
-# 'u2netp' kullanıyoruz çünkü hafif ve hızlı.
-# 'CPUExecutionProvider' diyerek sadece işlemciyi zorluyoruz (GPU hatasını önler).
-print("Model yükleniyor...")
-try:
-    my_session = new_session("u2netp", providers=['CPUExecutionProvider'])
-    print("Model başarıyla yüklendi ve CPU modunda hazır.")
-except Exception as e:
-    print(f"Model yüklenirken hata oluştu: {e}")
+# Global değişken
+my_session = None
+
+@app.on_event("startup")
+def load_model():
+    global my_session
+    print("--- SUNUCU BAŞLATILIYOR ---")
+    
+    model_path = "u2netp.onnx"
+    if os.path.exists(model_path):
+        print(f"Dosya bulundu: {model_path}")
+    else:
+        print(f"UYARI: {model_path} bulunamadı! Lütfen dosyanın yüklendiğinden emin olun.")
+
+    print("Model hafızaya yükleniyor (CPU Modu)...")
+    try:
+        # Modeli yüklüyoruz
+        my_session = new_session("u2netp", providers=['CPUExecutionProvider'])
+        print("Model BAŞARIYLA yüklendi.")
+    except Exception as e:
+        print(f"Model yüklenirken hata: {e}")
 
 @app.get("/")
 def home():
-    return {"message": "API calisiyor. /remove-bg adresine POST istegi atabilirsiniz."}
+    return {"message": "API calisiyor. Durum: Aktif."}
 
 @app.post("/remove-bg")
 async def remove_background(file: UploadFile = File(...)):
-    # 3. Gelen resmi okuyoruz
+    if my_session is None:
+        return {"error": "Model yuklenemedi."}
+        
+    # 1. Resmi oku
     input_image = await file.read()
     
-    # 4. Hazırda bekleyen 'my_session' ile arka planı siliyoruz.
-    # Bu yöntem her seferinde modeli yeniden yüklemekten çok daha hızlıdır.
-    output_image = remove(input_image, session=my_session)
+    try:
+        # 2. İşlemi yap
+        output_image = remove(input_image, session=my_session)
+        
+        # 3. Başarılıysa sonucu döndür
+        return Response(content=output_image, media_type="image/png")
     
-    # 5. Sonucu geri döndürüyoruz
-    return Response(content=output_image, media_type="image/png")
+    except Exception as e:
+        return {"error": str(e)}
+        
+    finally:
+        # --- KRİTİK BÖLÜM: RAM TEMİZLİĞİ ---
+        # İşlem bitince (başarılı olsun veya olmasın)
+        # Değişkenleri silip hafızayı temizlemeye zorluyoruz.
+        del input_image
+        # Eğer output_image tanımlıysa onu return ettik ama garbage collector halleder.
+        gc.collect() # Çöpleri topla ve RAM'i boşalt

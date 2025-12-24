@@ -32,3 +32,5 @@ async def remove_background(file: UploadFile = File(...)):
     
     # 5. Sonucu PNG resmi olarak dondur
     return Response(content=img_byte_arr, media_type="image/png")
+
+# Lite model güncellemesi v2
